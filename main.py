@@ -59,7 +59,7 @@ if __name__ == "__main__":
     results = tune.Tuner(
         "PPO",
         run_config=air.RunConfig(
-            stop=TrialPlateauStopper(metric="custom_metric/win_mean")
+            stop=TrialPlateauStopper(metric="custom_metrics/win_mean")
         ),
         param_space=config
     ).fit()
