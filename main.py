@@ -35,8 +35,9 @@ if __name__ == "__main__":
     config = (
         PPOConfig()
         .environment("themind", env_config={
-            "hand_size": 10,
+            "hand_size": 5,
             "intention_size": tune.grid_search([0, 1]),
+            "number_of_players": 5,
             "stall_limit": 5
         })
         .resources(num_cpus_per_worker=1)
@@ -44,22 +45,22 @@ if __name__ == "__main__":
         .evaluation(
             evaluation_interval=10_000,
             evaluation_duration=10,
-            evaluation_num_workers=1
+            evaluation_num_workers=3
         )
         .multi_agent(
             policies={
-                "player1": (None, None, None, {}),
-                "player2": (None, None, None, {})
+                f"player{i+1}": (None, None, None, {}) for i in range(10)
             },
             policy_mapping_fn=(lambda agent_id, *args, **kwargs: agent_id),
         )
         .callbacks(CustomTheMindCallback)
     )
 
+    stop = {"episodes_total": 60000}
     results = tune.Tuner(
         "PPO",
         run_config=air.RunConfig(
-            stop=TrialPlateauStopper(metric="custom_metrics/win_mean")
+            stop=stop
         ),
         param_space=config
     ).fit()

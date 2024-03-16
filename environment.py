@@ -1,16 +1,17 @@
+from itertools import chain
 from typing import Dict, List, Any, Optional, Tuple
 
 import numpy as np
 from gymnasium.vector.utils import spaces
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 
-
 TheMindObservation = Dict[str, Dict[str, Any]]
 
 
 class TheMindEnvironment(MultiAgentEnv):
     decks: Dict[str, List[int]]
-    current_player: str
+    intentions: np.array
+    current_player_index: int
     table: int
     pile_size: int
     stall_count: int
@@ -21,106 +22,127 @@ class TheMindEnvironment(MultiAgentEnv):
     def __init__(self, config: dict):
         super().__init__()
 
+        self.number_of_players = config.get("number_of_players", 2)
         self.hand_size = config.get("hand_size", 5)
         self.intention_size = config.get("intention_size", 0)
-        self.stall_limit = config.get("stall_limit", 2)
+        self.stall_limit = config.get("stall_limit", 2) * self.number_of_players
 
-        self._agent_ids = ["player1", "player2"]
+        self._agent_ids = list(self.all_players())
 
-        # 101 because hand is set to 100 when the other player has no cards
-
-        table_space = spaces.Box(0, 1, shape=(1,))
-        hand_space = spaces.Box(0, 1, shape=(2,))
-        intention_space = spaces.Box(0, 1, shape=(self.intention_size,))
+        observation_dict = {
+                "table": spaces.Box(0, 1, shape=(1,)),
+                "hand": spaces.Box(0, 1, shape=(2,)),
+        }
+        if self.intention_size > 0:
+            observation_dict["intention"] = spaces.Box(0, 1, shape=(self.intention_size, self.number_of_players - 1))
 
         self.observation_space = spaces.Dict({
-            "player1": spaces.Dict({"table": table_space,
-                                    "hand": hand_space,
-                                    "intention": intention_space}),
-            "player2": spaces.Dict({"table": table_space,
-                                    "hand": hand_space,
-                                    "intention": intention_space}),
+            player: spaces.Dict(observation_dict) for player in self.all_players()
         })
+
+        action_dict = {
+            "play": spaces.Box(0, 1, shape=(1,))
+        }
+        if self.intention_size > 0:
+            action_dict["intention"] = spaces.Box(0, 1, shape=(self.intention_size,))
+
         self.action_space = spaces.Dict({
-            "player1": spaces.Dict({"play": spaces.Box(0, 1, shape=(1,)),
-                                    "intention": spaces.Box(0, 1, shape=(self.intention_size,))}),
-            "player2": spaces.Dict({"play": spaces.Box(0, 1, shape=(1,)),
-                                    "intention": spaces.Box(0, 1, shape=(self.intention_size,))}),
+            player: spaces.Dict(action_dict) for player in self.all_players()
         })
 
         self.reset_variables()
 
     def reset_variables(self):
         self.decks: Dict[str, List[int]] = {}
+        self.intentions = np.zeros((self.intention_size, self.number_of_players), dtype=np.float32)
         self.draw_decks()
-        self.current_player = "player1"
+        self.current_player_index = 0
         self.table = 0
         self.pile_size = 0
         self.stall_count = 0
         self.finished = False
         self.won = False
         self.termination = {
-            "player1": False,
-            "player2": False,
-            "__all__": False
+            player: False for player in self.all_players()
         }
+        self.termination["__all__"] = False
+
+    def all_players(self):
+        for i in range(0, self.number_of_players):
+            yield f"player{i+1}"
+
+    def player(self, player):
+        return f"player{player+1}"
 
     @property
-    def other_player(self):
-        return "player1" if self.current_player == "player2" else "player2"
+    def next_player_index(self):
+        return (self.current_player_index + 1) % self.number_of_players
+
+    @property
+    def next_player(self):
+        return self.player(self.next_player_index)
 
     def draw_decks(self):
-        cards_drawn = np.random.choice(100, self.hand_size * 2, replace=False)
+        cards_drawn = np.random.choice(100, self.hand_size * self.number_of_players, replace=False)
 
         self.decks = {
-            "player1": list(sorted(cards_drawn[:self.hand_size])),
-            "player2": list(sorted(cards_drawn[self.hand_size:]))
+            player: list(sorted(cards_drawn[index * self.hand_size:index * self.hand_size + self.hand_size]))
+            for index, player in enumerate(self.all_players())
         }
 
-    def get_top_cards(self, player):
+    def get_top_cards(self, player: str):
         top_card = self.decks[player][0] if len(self.decks[player]) > 0 else 100
         second_card = self.decks[player][1] if len(self.decks[player]) > 1 else 100
         return top_card, second_card
 
-    def get_top_cards_observation(self, player):
+    def get_top_cards_observation(self, player: str):
         top_card, second_card = self.get_top_cards(player)
-        return np.array([top_card/100, second_card/100], dtype=np.float32)
+        return np.array([top_card / 100, second_card / 100], dtype=np.float32)
 
     def get_table_observation(self):
-        return np.array([self.table/100], dtype=np.float32)
+        return np.array([self.table / 100], dtype=np.float32)
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed, options=options)
 
         self.reset_variables()
 
-        observation: TheMindObservation = {
-            "player1": {
-                "table": self.get_table_observation(),
-                "hand": self.get_top_cards_observation(self.current_player),
-                "intention": np.zeros((self.intention_size,), dtype=np.float32)
-            },
+        observation_dict = {
+            "table": self.get_table_observation(),
+            "hand": self.get_top_cards_observation(self.player(self.current_player_index)),
         }
-        return observation, {self.current_player: {"won": self.won}}
+        if self.intention_size > 0:
+            observation_dict["intention"] = np.zeros((self.intention_size, self.number_of_players - 1),
+                                                     dtype=np.float32)
+
+        observation: TheMindObservation = {
+            self.player(self.current_player_index): observation_dict
+        }
+        return observation, {self.player(self.current_player_index): {"won": self.won}}
 
     def compute_if_finished(self):
         if self.finished:
             return
 
-        other_player_top, _ = self.get_top_cards(self.other_player)
-        lost = self.table > other_player_top
+        min_card_on_hand = min(chain(*self.decks.values()))
+        lost = self.table > min_card_on_hand
         if lost:
             self.finished = True
             return
 
         # If one player has emptied his hand, the game is over
-        won = len(self.decks[self.current_player]) == 0 or len(self.decks[self.other_player]) == 0
+        empty_decks = 0
+        for deck in self.decks.values():
+            if len(deck) == 0:
+                empty_decks += 1
+        won = empty_decks >= self.number_of_players - 1
         if won:
-            # Empty both decks and place all cards on the table
-            self.table = max([*self.decks[self.current_player], *self.decks[self.other_player]])
-            self.pile_size = self.hand_size * 2
-            self.decks[self.current_player] = []
-            self.decks[self.other_player] = []
+            # Empty all decks and place all cards on the table
+            max_card_on_hand = max(chain(*self.decks.values()))
+            self.table = max(self.table, max_card_on_hand)
+            self.pile_size = self.hand_size * self.number_of_players
+            for player in self.all_players():
+                self.decks[player] = []
 
             self.won = True
             self.finished = True
@@ -132,17 +154,20 @@ class TheMindEnvironment(MultiAgentEnv):
 
     def read_action(self, action_dict) -> Tuple[bool, np.ndarray]:
         # Handling for cases when the action dict is received per agent and when it is received as a single dict
-        if self.current_player in action_dict:
-            action = action_dict[self.current_player]
+        if self.player(self.current_player_index) in action_dict:
+            action = action_dict[self.player(self.current_player_index)]
         else:
             action = action_dict
 
-        return action["play"] > 0.5, action["intention"]
+        return action["play"] > 0.5, action.get("intention", None)
 
-    def step(self, action_dict):
+    def step(self, action_dict) -> Tuple[TheMindObservation, Dict[str, float], Dict[str, bool], Dict[str, bool], Dict[str, Any]]:
         play, intention = self.read_action(action_dict)
 
-        hand = self.decks[self.current_player]
+        if self.intention_size > 0:
+            self.intentions[:, self.current_player_index] = intention
+
+        hand = self.decks[self.player(self.current_player_index)]
 
         # Applying action
         if not self.finished and play and len(hand) > 0:
@@ -154,36 +179,39 @@ class TheMindEnvironment(MultiAgentEnv):
 
         self.compute_if_finished()
 
+        # intention is the self.intentions matrix with every line but the next-player's line
+        observation_dict = {
+            "table": self.get_table_observation(),
+            "hand": self.get_top_cards_observation(self.next_player),
+        }
+        if self.intention_size > 0:
+            observation_dict["intention"] = np.delete(self.intentions, self.next_player_index, axis=1)
+
         observation = {
-            self.other_player: {
-                "table": self.get_table_observation(),
-                "hand": self.get_top_cards_observation(self.other_player),
-                "intention": intention
-            }
+            self.next_player: observation_dict
         }
 
         # Calculating rewards
         reward = {
-            self.current_player: self.pile_size / (self.hand_size * 2) if self.finished else 0
+            self.player(self.current_player_index): self.pile_size / (self.hand_size * self.number_of_players) if self.finished else 0
         }
 
         # Calculating if terminated
         if self.finished:
-            self.termination[self.current_player] = True
-            self.termination["__all__"] = self.termination[self.current_player] and self.termination[self.other_player]
+            self.termination[self.player(self.current_player_index)] = True
+            self.termination["__all__"] = self.termination[self.player(self.current_player_index)] and self.termination[self.next_player]
 
         # Calculating truncateds
         truncateds = {
-            "player1": False,
-            "player2": False,
             "__all__": False
         }
 
-        self.current_player = self.other_player
-        return observation, reward, self.termination, truncateds, {self.current_player: {"won": self.won}}
+        self.current_player_index = self.next_player_index
+        return (observation, reward, self.termination,
+                truncateds, {self.player(self.current_player_index): {"won": self.won}})
 
     def render(self):
         print("Table:", self.table)
-        print("Player1:", self.decks["player1"])
-        print("Player2:", self.decks["player2"])
-        print("Current player:", self.current_player)
+        for player in self.all_players():
+            print(self.player(player), self.decks[player])
+        print("Current player:", self.current_player_index)

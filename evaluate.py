@@ -17,7 +17,7 @@ while True:
     test_env.render()
 
     print("---- ACTION ----")
-    action = trained.compute_single_action(obs[test_env.current_player], policy_id=test_env.current_player)
+    action = trained.compute_single_action(obs[test_env.current_player_index], policy_id=test_env.current_player_index)
     print(action)
 
     obs, rewards, terminated, _, _ = test_env.step(action)
