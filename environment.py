@@ -191,7 +191,8 @@ class TheMindEnvironment(MultiAgentEnv):
 
         # Calculating rewards
         reward = {
-            self.player(self.current_player_index): self.pile_size / (self.hand_size * self.number_of_players)
+            self.player(self.current_player_index):
+                self.pile_size / (self.hand_size * self.number_of_players) if self.finished else 0
         }
 
         # Calculating if terminated
