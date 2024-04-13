@@ -2,6 +2,7 @@ from typing import Dict, Union, Optional
 
 from ray import air, tune
 from ray.rllib import BaseEnv, Policy
+from ray.rllib.algorithms import SACConfig
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.evaluation import Episode
 from ray.rllib.evaluation.episode_v2 import EpisodeV2
@@ -33,20 +34,17 @@ if __name__ == "__main__":
     register_env("themind", lambda config: TheMindEnvironment(config))
 
     config = (
-        PPOConfig()
+        SACConfig()
+        .training()
+        .resources(num_cpus_per_worker=1)
+        .rollouts(num_rollout_workers=7, rollout_fragment_length=100,
+                  num_envs_per_worker=8, batch_mode="complete_episodes")
         .environment("themind", env_config={
-            "hand_size": 5,
+            "hand_size": 10,
             "intention_size": tune.grid_search([0, 1]),
-            "number_of_players": 5,
+            "number_of_players": 2,
             "stall_limit": 5
         })
-        .resources(num_cpus_per_worker=1)
-        .rollouts(num_rollout_workers=2, batch_mode="complete_episodes")
-        .evaluation(
-            evaluation_interval=10_000,
-            evaluation_duration=10,
-            evaluation_num_workers=3
-        )
         .multi_agent(
             policies={
                 f"player{i+1}": (None, None, None, {}) for i in range(10)
@@ -56,11 +54,10 @@ if __name__ == "__main__":
         .callbacks(CustomTheMindCallback)
     )
 
-    stop = {"episodes_total": 60000}
     results = tune.Tuner(
-        "PPO",
+        "SAC",
         run_config=air.RunConfig(
-            stop=stop
+            stop={"episodes_total": 6_000_000},
         ),
         param_space=config
     ).fit()
