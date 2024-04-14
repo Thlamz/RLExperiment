@@ -40,12 +40,14 @@ class TheMindEnvironment(MultiAgentEnv):
             player: spaces.Dict(observation_dict) for player in self.all_players()
         })
 
-        action_dict = spaces.Box(0, 1, shape=(1,))
+        action_dict = {
+            "play": spaces.Box(0, 1, shape=(1,))
+        }
         if self.intention_size > 0:
-            action_dict = spaces.Box(0, 1, shape=(1 + self.intention_size,))
+            action_dict["intention"] = spaces.Box(0, 1, shape=(self.intention_size,))
 
         self.action_space = spaces.Dict({
-            player: action_dict for player in self.all_players()
+            player: spaces.Dict(action_dict) for player in self.all_players()
         })
 
         self.reset_variables()
@@ -157,7 +159,7 @@ class TheMindEnvironment(MultiAgentEnv):
         else:
             action = action_dict
 
-        return action[0] > 0.5, action[1:]
+        return action["play"] > 0.5, action.get("intention", None)
 
     def step(self, action_dict) -> Tuple[TheMindObservation, Dict[str, float], Dict[str, bool], Dict[str, bool], Dict[str, Any]]:
         play, intention = self.read_action(action_dict)
@@ -191,8 +193,7 @@ class TheMindEnvironment(MultiAgentEnv):
 
         # Calculating rewards
         reward = {
-            self.player(self.current_player_index):
-                self.pile_size / (self.hand_size * self.number_of_players) if self.finished else 0
+            self.player(self.current_player_index): self.pile_size / (self.hand_size * self.number_of_players) if self.finished else 0
         }
 
         # Calculating if terminated

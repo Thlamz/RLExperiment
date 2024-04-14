@@ -4,6 +4,8 @@ from ray import air, tune
 from ray.rllib import BaseEnv, Policy
 from ray.rllib.algorithms import SACConfig
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
+from ray.rllib.core.rl_module.marl_module import MultiAgentRLModuleSpec
+from ray.rllib.core.rl_module.rl_module import SingleAgentRLModuleSpec
 from ray.rllib.evaluation import Episode
 from ray.rllib.evaluation.episode_v2 import EpisodeV2
 from ray.rllib.utils.typing import PolicyID
@@ -34,30 +36,35 @@ if __name__ == "__main__":
     register_env("themind", lambda config: TheMindEnvironment(config))
 
     config = (
-        SACConfig()
+        PPOConfig()
         .training()
         .resources(num_cpus_per_worker=1)
-        .rollouts(num_rollout_workers=7, rollout_fragment_length=100,
+        .rollouts(num_rollout_workers=7, rollout_fragment_length='auto',
                   num_envs_per_worker=8, batch_mode="complete_episodes")
         .environment("themind", env_config={
             "hand_size": 10,
             "intention_size": tune.grid_search([0, 1]),
-            "number_of_players": 2,
+            "number_of_players": 3 ,
             "stall_limit": 5
         })
         .multi_agent(
             policies={
-                f"player{i+1}": (None, None, None, {}) for i in range(10)
+                "p0"
             },
-            policy_mapping_fn=(lambda agent_id, *args, **kwargs: agent_id),
+            policy_mapping_fn=(lambda agent_id, *args, **kwargs: "p0"),
+        )
+        .rl_module(
+            rl_module_spec=MultiAgentRLModuleSpec(
+                module_specs={"p0": SingleAgentRLModuleSpec()}
+            )
         )
         .callbacks(CustomTheMindCallback)
     )
 
     results = tune.Tuner(
-        "SAC",
+        "PPO",
         run_config=air.RunConfig(
-            stop={"episodes_total": 6_000_000},
+            stop={"episodes_total": 60_000},
         ),
         param_space=config
     ).fit()
